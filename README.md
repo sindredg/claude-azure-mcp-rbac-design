@@ -1,4 +1,4 @@
-# Least-privilege AI access to Azure: Claude + Azure MCP Server
+# Least-privilege AI access to Azure: Claude + MCP Server + App Registration
 
 This repo documents connecting an AI to a live Azure environment with scoped read access: a service principal scoped to a single resource group with Reader only, wired into the Azure MCP Server in Claude Desktop, then tested to prove both what it can do and what it can't.
 
@@ -28,12 +28,12 @@ CLIENT ─ Claude Desktop
 MCP SERVER ─ Azure MCP Server (local, --read-only)
     │  credential chain (EnvironmentCredential) → client credentials flow
     ▼
-SERVICE SIDE ─ Microsoft Entra ID
+CLOUD SERVICE ─ Microsoft Entra ID
     │  authenticates the identity, issues OAuth 2.0 access token (JWT) for "claude-azure-reader" SP
     │                       │
     │                       └──► Service principal sign-in logs
     ▼
-SERVICE SIDE ─ Azure Resource Manager
+CLOUD SERVICE ─ Azure Resource Manager
     │  evaluates RBAC per request against the token
     ├──► reads inside <resource-group>: allowed
     └──► writes: 403; out-of-scope reads: 403 or filtered from results
@@ -56,9 +56,9 @@ The point: layers 1 and 2 live on the local machine and can fail or be tampered 
 
 ## Proof of concept
 
-### Service side: identity, scope and permissions
+### Cloud service: identity, scope and permissions
 
-The Azure MCP Server [microsoft/mcp](https://github.com/microsoft/mcp). An MCP server is a local program the AI client launches and talks to over stdio; it translates the model's tool calls into real API requests, here against ARM using the service principal's token. "Server" means the side that answers requests, not a process listening on the network.
+The Azure MCP Server [microsoft/mcp](https://github.com/microsoft/mcp/releases). An MCP server is a local program the AI client launches and talks to over stdio; it translates the model's tool calls into real API requests, here against ARM using the service principal's token. "Server" means the side that answers requests, not a process listening on the network.
 
 Create the app registration, service principal and role assignment in one command:
 
