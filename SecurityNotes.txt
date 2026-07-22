@@ -1,0 +1,34 @@
+# Security notes
+
+The client secret sits in plain text in `claude_desktop_config.json`.
+
+Better options:
+
+1. **Certificate auth:** switch the app registration to a certificate and set `AZURE_CLIENT_CERTIFICATE_PATH`. No secret string exists anywhere.
+2. **Wrapper script:** point `command` at a script that reads the secret from Windows Credential Manager into the environment and then launches `azmcp.exe`.
+3. **Rotation:** short secret expiry, and rotate immediately if the config file is ever exposed.
+4. **Least privilege:** does not protect the secret, but caps what a leaked one is worth. Reader on one resource group rather than Contributor on the subscription.
+
+## Data security posture
+
+Enforcement controls what the identity can do; data posture controls what the model provider sees. Only the first is solved by RBAC, and the two degrade independently. The current setup is acceptable for a lab on both counts, but not universally:
+
+- **What the model sees:** every tool result reaches the model provider: names, configurations, tags, topology. Reader on ARM does not return most secret material (Key Vault values need data-plane access, storage keys need listKeys), so exposure is architecture metadata. Residual risk is sloppy habits: connection strings in app settings, credentials in tags or VM extensions.
+- **Secret at rest:** plain text in the MCP host's config file, readable by any process running as the signed-in user, and from there usable to authenticate from anywhere. The RBAC scope makes this acceptable, not the storage; at higher privilege this is the first thing to fix.
+- **Conversation retention:** chat content may be retained and, depending on plan and settings, used for training. Set privacy settings deliberately. This is irrelevant for a lab but the first question once anything sensitive is readable.
+- **Prompt injection:** attacker-influenced content the model reads (e.g. resource tags) enters its context as potential instructions. Scoping, read-only tooling and Reader RBAC are the containment: injected instructions have nothing destructive to invoke.
+
+The posture degrades in a known order as content sensitivity rises: retention settings stop being acceptable first, then plaintext secret storage, then the shared service principal itself. That ordering is the main takeaway.
+
+## What this looks like at enterprise scale
+
+This lab setup translates, but nearly every component gets swapped for a managed equivalent:
+
+- **Identity:** managed identity or workload identity federation instead of a client secret; if secrets are unavoidable, Key Vault with enforced rotation, never plain text config files.
+- **Access model:** group-based assignments under Entra ID Governance (access packages, access reviews, PIM for any elevated path); custom roles where Reader is still too broad, e.g. excluding `Microsoft.KeyVault/vaults/read` to block vault enumeration.
+- **Scope:** read access at a management group of non-production subscriptions, with production excluded and the boundary enforced by Azure Policy denying role assignments to AI identities at production scopes.
+- **Server hosting:** remote MCP server behind Azure API Management; APIM handles the Entra OAuth handshake and Conditional Access, users authenticate as themselves, and audit logs show real names instead of one shared service principal. A shared service principal is the right shape for one person, the wrong shape for fifty.
+- **Data exposure:** everything the identity can read reaches the model provider, which forces a review of readable content (connection strings, PII, IPs, resource names etc.), a DLP position on AI tooling, and possibly contractual or regional constraints on where inference happens.
+- **Monitoring:** Sentinel analytics rules on the AI identity: off-hours auth, unexpected IPs, any write attempt, tokens outside the known pattern.
+
+Same three decisions as the lab (dedicated identity, minimal scope, service-side enforcement). The principle from the intro, that security must not depend on how autonomously the AI operates, is what makes this scale-up safe: agents running without a human in the loop are tolerable precisely because the design never depended on one.

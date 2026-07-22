@@ -1,4 +1,4 @@
-# Troubleshooting, lessons learned and security notes
+# Troubleshooting and lessons learned
 
 How I got the Azure MCP Server to authenticate as a service principal (Entra ID app registration) instead of an interactive Azure user login.
 Written down because the failure was not obvious and cost some time.

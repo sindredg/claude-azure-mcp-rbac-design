@@ -80,7 +80,7 @@ Four layers:
 
 The point: layers 1 and 2 are advisory and live on the local machine, where they can fail or be tampered with. Layer 3 is authoritative and is evaluated by ARM on every request. Designed so that the only layer that must hold is the service principal's permissions being correct.
 
-## Proof of concept
+## Workflow / Steps
 
 ### On the cloud service: identity, scope and permissions
 
@@ -95,9 +95,15 @@ az ad sp create-for-rbac `
 
 The output contains `appId`, `password` and `tenant`. These are the three values the MCP server authenticates with (save it for later).
 
+The service principal is now visible in Entra:
+![App registration in Entra ID](images/entra-appreg.png)
+
+And the role is visible on the RG:
+![SP Reader role on RG](images/sp-reader-role.png)
+
 ### MCP server: configuration and launch restrictions
 
-First attempt was the Azure MCP Server extension in Claude Desktop with the credentials stored as Windows user-level environment variables. That fails by design: the host launches extension-managed servers with a sanitized environment, so the variables never reach the server process, `EnvironmentCredential` finds nothing, and the credential chain falls through toward interactive login. The extension's own settings panel offered no workable way to supply them either. Full diagnosis in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+*Note: First attempt was the Azure MCP Server extension in Claude Desktop with the credentials stored as Windows user-level environment variables. That fails by design: the host launches extension-managed servers with a sanitized environment, so the variables never reach the server process, `EnvironmentCredential` finds nothing, and the credential chain falls through toward interactive login. The extension's own settings panel offered no workable way to supply them either. Full diagnosis in [Troubleshooting.md](Troubleshooting.md).*
 
 The working setup is a manual server entry in `%APPDATA%\Claude\claude_desktop_config.json`, pointing at the extension's own `azmcp.exe`, where the `env` block guarantees the child process sees exactly these three variables:
 
@@ -199,26 +205,5 @@ Two layers visible in one test: the `--read-only` flag stopped any real write fr
 - A secret that leaks anywhere (chat, repo, screen share) gets rotated immediately. Assume compromise rather than debating it.
 - `az role assignment list --assignee <app-id> --all -o table` shows every grant the service principal holds. Run periodically to catch drift, such as leftover assignments from earlier setup attempts.
 
-## Data security posture
-
-Enforcement controls what the identity can do; data posture controls what the model provider sees. Only the first is solved by RBAC, and the two degrade independently. The current setup is acceptable for a lab on both counts, but not universally:
-
-- **What the model sees:** every tool result reaches the model provider: names, configurations, tags, topology. Reader on ARM does not return most secret material (Key Vault values need data-plane access, storage keys need listKeys), so exposure is architecture metadata. Residual risk is sloppy habits: connection strings in app settings, credentials in tags or VM extensions.
-- **Secret at rest:** plain text in the MCP host's config file, readable by any process running as the signed-in user, and from there usable to authenticate from anywhere. The RBAC scope makes this acceptable, not the storage; at higher privilege this is the first thing to fix.
-- **Conversation retention:** chat content may be retained and, depending on plan and settings, used for training. Set privacy settings deliberately. This is irrelevant for a lab but the first question once anything sensitive is readable.
-- **Prompt injection:** attacker-influenced content the model reads (e.g. resource tags) enters its context as potential instructions. Scoping, read-only tooling and Reader RBAC are the containment: injected instructions have nothing destructive to invoke.
-
-The posture degrades in a known order as content sensitivity rises: retention settings stop being acceptable first, then plaintext secret storage, then the shared service principal itself. That ordering is the main takeaway.
-
-## What this looks like at enterprise scale
-
-This lab setup translates, but nearly every component gets swapped for a managed equivalent:
-
-- **Identity:** managed identity or workload identity federation instead of a client secret; if secrets are unavoidable, Key Vault with enforced rotation, never plain text config files.
-- **Access model:** group-based assignments under Entra ID Governance (access packages, access reviews, PIM for any elevated path); custom roles where Reader is still too broad, e.g. excluding `Microsoft.KeyVault/vaults/read` to block vault enumeration.
-- **Scope:** read access at a management group of non-production subscriptions, with production excluded and the boundary enforced by Azure Policy denying role assignments to AI identities at production scopes.
-- **Server hosting:** remote MCP server behind Azure API Management; APIM handles the Entra OAuth handshake and Conditional Access, users authenticate as themselves, and audit logs show real names instead of one shared service principal. A shared service principal is the right shape for one person, the wrong shape for fifty.
-- **Data exposure:** everything the identity can read reaches the model provider, which forces a review of readable content (connection strings, PII, IPs, resource names etc.), a DLP position on AI tooling, and possibly contractual or regional constraints on where inference happens.
-- **Monitoring:** Sentinel analytics rules on the AI identity: off-hours auth, unexpected IPs, any write attempt, tokens outside the known pattern.
-
-Same three decisions as the lab (dedicated identity, minimal scope, service-side enforcement). The principle from the intro, that security must not depend on how autonomously the AI operates, is what makes this scale-up safe: agents running without a human in the loop are tolerable precisely because the design never depended on one.
+See [SecurityNotes.md](SecurityNotes.md) for general security notes, data security risks and what the setup would look like outside a lab environment. 
+See [Troubleshooting.md](Troubleshooting.md) for more details on faced issues during setup and steps done to resolve them.
