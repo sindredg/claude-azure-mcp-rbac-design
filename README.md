@@ -7,7 +7,9 @@ The design premise: an AI is just another workload identity, and how autonomousl
 
 Every stage of the chain still carries its own controls: the MCP host (tool approval required, write/delete tools disabled), the MCP server (`--read-only` at launch), and the cloud (a service principal with Reader at resource group scope, evaluated per request). Defense in depth across all three, with enforcement deliberately placed in the one layer local access can't reach.
 
-## Design
+## Concept and Design
+
+### Terminology
 
 - **The model.** Claude itself, running remotely on Anthropic's API. It sees tool definitions, emits tool calls, reads tool results. It never sees the config file, the environment block or the secret.
 - **The MCP host.** Claude Desktop, a local user-level process running as the signed-in user. It reads the config, spawns the MCP server as a child process and injects the credentials into that child's environment. The tool approval prompt and the disabled write tools live here.
@@ -31,25 +33,36 @@ Two things are called "read only" and they are not the same control:
 
 ![Architecture overview](images/architecture.svg)
 
-The flow from prompt to Azure and back: model > host > server > cloud:
+The flow from prompt to Azure and back: model > host > server > cloud.
 
 ```
-CLIENT ─ Claude Desktop
-    │  tool approval, write/delete tools disabled
-    │  spawns local process, injects the env block from its config
-    ▼
-MCP SERVER ─ Azure MCP Server (local, --read-only)
+THE MODEL ─ Claude (remote, Anthropic API)
+    │  sees tool definitions, emits tool calls, reads tool results
+    │  never sees the config file, the env block or the secret
+    ▼  tool call
+MCP HOST ─ Claude Desktop (local user-level process, runs as you)
+    │  tool approval prompt; write/delete tools disabled
+    │  reads config from disk, injects env block into the process it spawns
+    ▼  spawn (child inherits env)
+MCP SERVER ─ Azure MCP Server (local child process, --read-only)
     │  credential chain (EnvironmentCredential) → client credentials flow
+    │
+═══════════ authoritative boundary═══════════
+    │
     ▼
 CLOUD SERVICE ─ Microsoft Entra ID
-    │  authenticates the identity, issues OAuth 2.0 access token (JWT) for our "claude-azure-reader" SP
-    │                       │
-    │                       └──► logged in Service principal sign-in logs
-    ▼
+    │  authenticates the "claude-azure-reader" service principal
+    │  issues OAuth 2.0 access token (JWT); the token carries identity, not scope
+    │                       └──► service principal sign-in logs
+    ▼  bearer token
 CLOUD SERVICE ─ Azure Resource Manager
-    │  evaluates RBAC per request against the token
-    ├──► reads inside <resource-group>: allowed
-    └──► writes: AuthorizationDenied. out-of-scope reads: invisible, filtered from results
+    │  evaluates the role assignment per request: Reader on one resource group
+    ├──► reads inside the resource group: allowed
+    ├──► writes: AuthorizationFailed
+    └──► outside the resource group: filtered from results, invisible
+
+results travel back up the same path, ARM → server → host → model, carrying
+data only; no credentials cross back into the model's context
 ```
 
 The model never sees the credentials; tool calls and tool results carry no secrets. The secret does exist at rest on the machine. The MCP host reads it from its config and injects it into the environment of the child process it spawns. What no part of the local chain can do is change what that identity is allowed to do. The `--read-only` flag and the disabled write tools are defense in depth, and anyone who can edit the config can undo both. The authoritative boundary is elsewhere: ARM evaluates RBAC per request against the identity Entra authenticated. A manipulated model or a compromised host changes what is attempted, never what is permitted. Even the secret itself, stolen and used from another machine entirely, carries nothing beyond Reader on one resource group.
