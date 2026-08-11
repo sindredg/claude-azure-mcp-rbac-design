@@ -33,6 +33,3 @@ nearly every component gets swapped for a managed equivalent:
 - **Server hosting:** remote MCP server behind Azure API Management; APIM handles the Entra OAuth handshake and Conditional Access, users authenticate as themselves, and audit logs show real names instead of one shared service principal. A shared service principal is the right shape for one person, the wrong shape for fifty.
 - **Data exposure:** everything the identity can read reaches the model provider, which forces a review of readable content (connection strings, PII, IPs, resource names etc.), a DLP position on AI tooling, and possibly contractual or regional constraints on where inference happens.
 - **Monitoring:** Sentinel analytics rules on the AI identity: off-hours auth, unexpected IPs, any write attempt, tokens outside the known pattern.
-
-Agents running without a human in the loop are tolerable here precisely because the design never
-depended on one.
